@@ -3,18 +3,12 @@
 namespace Illuminate\Tests\Console;
 
 use Illuminate\Console\OutputStyle;
-use Mockery as m;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 
 class OutputStyleTest extends TestCase
 {
-    protected function tearDown(): void
-    {
-        m::close();
-    }
-
     public function testDetectsNewLine()
     {
         $bufferedOutput = new BufferedOutput();
@@ -58,6 +52,23 @@ class OutputStyleTest extends TestCase
         $style = new OutputStyle(new ArrayInput([]), $bufferedOutput);
 
         $style->writeln('Foo');
+        $this->assertTrue($style->newLineWritten());
+    }
+
+    public function testDetectsNewLineOnlyOnOutput()
+    {
+        $bufferedOutput = new BufferedOutput();
+
+        $style = new OutputStyle(new ArrayInput([]), $bufferedOutput);
+
+        $style->setVerbosity(OutputStyle::VERBOSITY_NORMAL);
+
+        $style->writeln('Foo', OutputStyle::VERBOSITY_VERBOSE);
+        $this->assertFalse($style->newLineWritten());
+
+        $style->setVerbosity(OutputStyle::VERBOSITY_VERBOSE);
+
+        $style->writeln('Foo', OutputStyle::VERBOSITY_VERBOSE);
         $this->assertTrue($style->newLineWritten());
     }
 }

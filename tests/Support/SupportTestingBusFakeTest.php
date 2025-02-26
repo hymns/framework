@@ -4,10 +4,14 @@ namespace Illuminate\Tests\Support;
 
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Contracts\Bus\QueueingDispatcher;
 use Illuminate\Support\Testing\Fakes\BatchRepositoryFake;
 use Illuminate\Support\Testing\Fakes\BusFake;
+use Illuminate\Support\Testing\Fakes\PendingBatchFake;
 use Mockery as m;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\ExpectationFailedException;
 use PHPUnit\Framework\TestCase;
 
@@ -460,12 +464,25 @@ class SupportTestingBusFakeTest extends TestCase
             $this->fake->assertNothingDispatched();
             $this->fail();
         } catch (ExpectationFailedException $e) {
-            $this->assertStringContainsString('Jobs were dispatched unexpectedly.', $e->getMessage());
+            $this->assertStringContainsString('The following jobs were dispatched unexpectedly:', $e->getMessage());
+            $this->assertStringContainsString(BusJobStub::class, $e->getMessage());
         }
     }
 
     public function testAssertChained()
     {
+        Container::setInstance($container = new Container);
+
+        $container->instance(Dispatcher::class, $this->fake);
+
+        $this->fake->chain([
+            new ChainedJobStub,
+        ])->dispatch();
+
+        $this->fake->assertChained([
+            ChainedJobStub::class,
+        ]);
+
         $this->fake->chain([
             new ChainedJobStub,
             new OtherBusJobStub,
@@ -475,6 +492,78 @@ class SupportTestingBusFakeTest extends TestCase
             ChainedJobStub::class,
             OtherBusJobStub::class,
         ]);
+
+        $this->fake->chain([
+            new ChainedJobStub,
+            $this->fake->batch([
+                new OtherBusJobStub,
+                new OtherBusJobStub,
+            ]),
+            new ChainedJobStub,
+        ])->dispatch();
+
+        $this->fake->assertChained([
+            ChainedJobStub::class,
+            $this->fake->chainedBatch(function ($pendingBatch) {
+                return $pendingBatch->jobs->count() === 2;
+            }),
+            ChainedJobStub::class,
+        ]);
+
+        $this->fake->assertChained([
+            new ChainedJobStub,
+            $this->fake->chainedBatch(function ($pendingBatch) {
+                return $pendingBatch->jobs->count() === 2;
+            }),
+            new ChainedJobStub,
+        ]);
+
+        $this->fake->chain([
+            $this->fake->batch([
+                new OtherBusJobStub,
+                new OtherBusJobStub,
+            ]),
+            new ChainedJobStub,
+            new ChainedJobStub,
+        ])->dispatch();
+
+        $this->fake->assertChained([
+            $this->fake->chainedBatch(function ($pendingBatch) {
+                return $pendingBatch->jobs->count() === 2;
+            }),
+            ChainedJobStub::class,
+            ChainedJobStub::class,
+        ]);
+
+        $this->fake->chain([
+            new ChainedJobStub(123),
+            new ChainedJobStub(456),
+        ])->dispatch();
+
+        $this->fake->assertChained([
+            fn (ChainedJobStub $job) => $job->id === 123,
+            fn (ChainedJobStub $job) => $job->id === 456,
+        ]);
+
+        Container::setInstance(null);
+    }
+
+    public function testAssertNothingChained()
+    {
+        $this->fake->assertNothingChained();
+    }
+
+    public function testAssertNothingChainedFails()
+    {
+        $this->fake->chain([new ChainedJobStub])->dispatch();
+
+        try {
+            $this->fake->assertNothingDispatched();
+            $this->fail();
+        } catch (ExpectationFailedException $e) {
+            $this->assertStringContainsString('The following jobs were dispatched unexpectedly:', $e->getMessage());
+            $this->assertStringContainsString(ChainedJobStub::class, $e->getMessage());
+        }
     }
 
     public function testAssertDispatchedWithIgnoreClass()
@@ -578,14 +667,57 @@ class SupportTestingBusFakeTest extends TestCase
     {
         $this->fake->assertNothingBatched();
 
-        $this->fake->batch([])->dispatch();
+        $job = new BusJobStub;
+
+        $this->fake->batch([$job])->dispatch();
 
         try {
             $this->fake->assertNothingBatched();
             $this->fail();
         } catch (ExpectationFailedException $e) {
-            $this->assertStringContainsString('Batched jobs were dispatched unexpectedly.', $e->getMessage());
+            $this->assertStringContainsString("The following batched jobs were dispatched unexpectedly:\n\n- ".get_class($job), $e->getMessage());
         }
+    }
+
+    public function testAssertNothingPlacedPasses()
+    {
+        $this->fake->assertNothingPlaced();
+    }
+
+    public function testAssertNothingPlacedWhenJobBatched()
+    {
+        $this->fake->batch([new BusJobStub])->dispatch();
+
+        $this->expectException(ExpectationFailedException::class);
+
+        $this->fake->assertNothingPlaced();
+    }
+
+    public function testAssertNothingPlacedWhenJobDispatched()
+    {
+        $this->fake->dispatch(new BusJobStub);
+
+        $this->expectException(ExpectationFailedException::class);
+
+        $this->fake->assertNothingPlaced();
+    }
+
+    public function testAssertNothingPlacedWhenJobChained()
+    {
+        $this->fake->chain([new ChainedJobStub])->dispatch();
+
+        $this->expectException(ExpectationFailedException::class);
+
+        $this->fake->assertNothingPlaced();
+    }
+
+    public function testAssertNothingPlacedWhenJobDispatchedNow()
+    {
+        $this->fake->dispatchNow(new BusJobStub);
+
+        $this->expectException(ExpectationFailedException::class);
+
+        $this->fake->assertNothingPlaced();
     }
 
     public function testFindBatch()
@@ -658,6 +790,55 @@ class SupportTestingBusFakeTest extends TestCase
         $this->assertSame(0, $batch->failedJobs);
         $this->assertSame(0, $batch->pendingJobs);
     }
+
+    #[DataProvider('serializeAndRestoreCommandMethodsDataProvider')]
+    public function testCanSerializeAndRestoreCommands($commandFunctionName, $assertionFunctionName)
+    {
+        $serializingBusFake = (clone $this->fake)->serializeAndRestore();
+
+        // without setting the serialization, the job should return the value passed in
+        $this->fake->{$commandFunctionName}(new BusFakeJobWithSerialization('hello'));
+        $this->fake->{$assertionFunctionName}(BusFakeJobWithSerialization::class, fn ($command) => $command->value === 'hello');
+
+        // when enabling the serializeAndRestore property, job has value modified
+        $serializingBusFake->{$commandFunctionName}(new BusFakeJobWithSerialization('hello'));
+        $serializingBusFake->{$assertionFunctionName}(
+            BusFakeJobWithSerialization::class,
+            fn ($command) => $command->value === 'hello-serialized-unserialized'
+        );
+    }
+
+    public static function serializeAndRestoreCommandMethodsDataProvider(): array
+    {
+        return [
+            'dispatch' => ['dispatch', 'assertDispatched'],
+            'dispatchSync' => ['dispatchSync', 'assertDispatchedSync'],
+            'dispatchNow' => ['dispatchNow', 'assertDispatched'],
+            'dispatchAfterResponse' => ['dispatchAfterResponse', 'assertDispatchedAfterResponse'],
+        ];
+    }
+
+    public function testCanSerializeAndRestoreCommandsInBatch()
+    {
+        $serializingBusFake = (clone $this->fake)->serializeAndRestore();
+
+        // without setting the serialization, the batch should return the value passed in
+        $this->fake->batch([
+            new BusFakeJobWithSerialization('hello'),
+        ])->dispatch();
+        $this->fake->assertBatched(function (PendingBatchFake $batchedCollection) {
+            return $batchedCollection->jobs->count() === 1 && $batchedCollection->jobs->first()->value === 'hello';
+        });
+
+        // when enabling the serializeAndRestore property, each batch jobs will each be serialized/restored
+        $serializingBusFake->batch([
+            new BusFakeJobWithSerialization('hello'),
+        ])->dispatch();
+
+        $serializingBusFake->assertBatched(function (PendingBatchFake $batchedCollection) {
+            return $batchedCollection->jobs->count() === 1 && $batchedCollection->jobs->first()->value === 'hello';
+        });
+    }
 }
 
 class BusJobStub
@@ -668,6 +849,13 @@ class BusJobStub
 class ChainedJobStub
 {
     use Queueable;
+
+    public $id;
+
+    public function __construct($id = null)
+    {
+        $this->id = $id;
+    }
 }
 
 class OtherBusJobStub
@@ -683,4 +871,23 @@ class OtherBusJobStub
 class ThirdJob
 {
     //
+}
+
+class BusFakeJobWithSerialization
+{
+    use Queueable;
+
+    public function __construct(public $value)
+    {
+    }
+
+    public function __serialize(): array
+    {
+        return ['value' => $this->value.'-serialized'];
+    }
+
+    public function __unserialize(array $data): void
+    {
+        $this->value = $data['value'].'-unserialized';
+    }
 }

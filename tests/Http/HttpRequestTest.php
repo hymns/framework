@@ -12,16 +12,16 @@ use Illuminate\Support\Stringable;
 use Illuminate\Tests\Database\Fixtures\Models\Money\Price;
 use InvalidArgumentException;
 use Mockery as m;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Exception\SessionNotFoundException;
 use Symfony\Component\HttpFoundation\File\UploadedFile as SymfonyUploadedFile;
+use Symfony\Component\HttpFoundation\InputBag;
 use Symfony\Component\HttpFoundation\Request as SymfonyRequest;
 use Symfony\Component\HttpFoundation\Session\SessionInterface;
 
-if (PHP_VERSION_ID >= 80100) {
-    include 'Enums.php';
-}
+include_once 'Enums.php';
 
 class HttpRequestTest extends TestCase
 {
@@ -81,9 +81,7 @@ class HttpRequestTest extends TestCase
         $this->assertSame('foo bar', $request->decodedPath());
     }
 
-    /**
-     * @dataProvider segmentProvider
-     */
+    #[DataProvider('segmentProvider')]
     public function testSegmentMethod($path, $segment, $expected)
     {
         $request = Request::create($path);
@@ -100,9 +98,7 @@ class HttpRequestTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider segmentsProvider
-     */
+    #[DataProvider('segmentsProvider')]
     public function testSegmentsMethod($path, $expected)
     {
         $request = Request::create($path);
@@ -254,6 +250,15 @@ class HttpRequestTest extends TestCase
         $request->headers->set('Purpose', 'prefetch');
         $this->assertTrue($request->prefetch());
         $request->headers->set('Purpose', 'Prefetch');
+        $this->assertTrue($request->prefetch());
+
+        $request->headers->remove('Purpose');
+
+        $request->headers->set('Sec-Purpose', '');
+        $this->assertFalse($request->prefetch());
+        $request->headers->set('Sec-Purpose', 'prefetch');
+        $this->assertTrue($request->prefetch());
+        $request->headers->set('Sec-Purpose', 'Prefetch');
         $this->assertTrue($request->prefetch());
     }
 
@@ -674,6 +679,31 @@ class HttpRequestTest extends TestCase
         $this->assertSame(0.0, $request->float('null', 123.456));
     }
 
+    public function testArrayMethod()
+    {
+        $request = Request::create('/', 'GET', []);
+        $this->assertIsArray($request->array());
+        $this->assertEmpty($request->array());
+
+        $request = Request::create('/', 'GET', [
+            'users' => [1, 2, 3],
+            'roles' => [4, 5, 6],
+            'email' => 'test@example.com',
+        ]);
+
+        $this->assertEmpty($request->array('missing'));
+        $this->assertEmpty($request->array(['missing']));
+        $this->assertEquals([1, 2, 3], $request->array('users'));
+        $this->assertEquals(['users' => [1, 2, 3]], $request->array(['users']));
+        $this->assertEquals(['users' => [1, 2, 3], 'email' => 'test@example.com'], $request->array(['users', 'email']));
+
+        $this->assertEquals([
+            'users' => [1, 2, 3],
+            'roles' => [4, 5, 6],
+            'email' => 'test@example.com',
+        ], $request->array());
+    }
+
     public function testCollectMethod()
     {
         $request = Request::create('/', 'GET', ['users' => [1, 2, 3]]);
@@ -723,7 +753,7 @@ class HttpRequestTest extends TestCase
         $this->assertNull($request->date('doesnt_exists'));
 
         $this->assertEquals($current, $request->date('as_datetime'));
-        $this->assertEquals($current, $request->date('as_format', 'U'));
+        $this->assertEquals($current->format('Y-m-d H:i:s P'), $request->date('as_format', 'U')->format('Y-m-d H:i:s P'));
         $this->assertEquals($current, $request->date('as_timezone', null, 'America/Santiago'));
 
         $this->assertTrue($request->date('as_date')->isSameDay($current));
@@ -757,13 +787,75 @@ class HttpRequestTest extends TestCase
         $request = Request::create('/', 'GET', [
             'valid_enum_value' => 'test',
             'invalid_enum_value' => 'invalid',
+            'empty_value_request' => '',
+            'string' => [
+                'minus_1' => '-1',
+                '0' => '0',
+                'plus_1' => '1',
+                'doesnt_exist' => '-1024',
+            ],
+            'int' => [
+                'minus_1' => -1,
+                '0' => 0,
+                'plus_1' => 1,
+                'doesnt_exist' => 1024,
+            ],
         ]);
 
-        $this->assertNull($request->enum('doesnt_exists', TestEnum::class));
+        $this->assertNull($request->enum('doesnt_exist', TestEnumBacked::class));
 
-        $this->assertEquals(TestEnum::test, $request->enum('valid_enum_value', TestEnum::class));
+        $this->assertEquals(TestEnumBacked::test, $request->enum('valid_enum_value', TestEnumBacked::class));
 
-        $this->assertNull($request->enum('invalid_enum_value', TestEnum::class));
+        $this->assertNull($request->enum('invalid_enum_value', TestEnumBacked::class));
+        $this->assertNull($request->enum('empty_value_request', TestEnumBacked::class));
+        $this->assertNull($request->enum('valid_enum_value', TestEnum::class));
+
+        $this->assertEquals(TestIntegerEnumBacked::minus_1, $request->enum('string.minus_1', TestIntegerEnumBacked::class));
+        $this->assertEquals(TestIntegerEnumBacked::zero, $request->enum('string.0', TestIntegerEnumBacked::class));
+        $this->assertEquals(TestIntegerEnumBacked::plus_1, $request->enum('string.plus_1', TestIntegerEnumBacked::class));
+        $this->assertNull($request->enum('string.doesnt_exist', TestIntegerEnumBacked::class));
+        $this->assertEquals(TestIntegerEnumBacked::minus_1, $request->enum('int.minus_1', TestIntegerEnumBacked::class));
+        $this->assertEquals(TestIntegerEnumBacked::zero, $request->enum('int.0', TestIntegerEnumBacked::class));
+        $this->assertEquals(TestIntegerEnumBacked::plus_1, $request->enum('int.plus_1', TestIntegerEnumBacked::class));
+        $this->assertNull($request->enum('int.doesnt_exist', TestIntegerEnumBacked::class));
+    }
+
+    public function testEnumsMethod()
+    {
+        $request = Request::create('/', 'GET', [
+            'valid_enum_values' => ['test', 'test'],
+            'invalid_enum_values' => ['invalid', 'invalid'],
+            'empty_value_request' => [],
+            'string' => [
+                'minus_1' => ['-1', '0'],
+                '0' => '0',
+                'plus_1' => '1',
+                'doesnt_exist' => '-1024',
+            ],
+            'int' => [
+                'minus_1' => -1,
+                '0' => 0,
+                'plus_1' => 1,
+                'doesnt_exist' => 1024,
+            ],
+        ]);
+
+        $this->assertEmpty($request->enums('doesnt_exist', TestEnumBacked::class));
+
+        $this->assertEquals([TestEnumBacked::test, TestEnumBacked::test], $request->enums('valid_enum_values', TestEnumBacked::class));
+
+        $this->assertEmpty($request->enums('invalid_enum_value', TestEnumBacked::class));
+        $this->assertEmpty($request->enums('empty_value_request', TestEnumBacked::class));
+        $this->assertEmpty($request->enums('valid_enum_value', TestEnum::class));
+
+        $this->assertEquals([TestIntegerEnumBacked::minus_1, TestIntegerEnumBacked::zero], $request->enums('string.minus_1', TestIntegerEnumBacked::class));
+        $this->assertEquals([TestIntegerEnumBacked::zero], $request->enums('string.0', TestIntegerEnumBacked::class));
+        $this->assertEquals([TestIntegerEnumBacked::plus_1], $request->enums('string.plus_1', TestIntegerEnumBacked::class));
+        $this->assertEmpty($request->enums('string.doesnt_exist', TestIntegerEnumBacked::class));
+        $this->assertEquals([TestIntegerEnumBacked::minus_1], $request->enums('int.minus_1', TestIntegerEnumBacked::class));
+        $this->assertEquals([TestIntegerEnumBacked::zero], $request->enums('int.0', TestIntegerEnumBacked::class));
+        $this->assertEquals([TestIntegerEnumBacked::plus_1], $request->enums('int.plus_1', TestIntegerEnumBacked::class));
+        $this->assertEmpty($request->enums('int.doesnt_exist', TestIntegerEnumBacked::class));
     }
 
     public function testArrayAccess()
@@ -975,6 +1067,16 @@ class HttpRequestTest extends TestCase
         $request->mergeIfMissing($merge);
         $this->assertSame('Taylor', $request->input('name'));
         $this->assertSame(1, $request->input('boolean_setting'));
+
+        $request = Request::create('/', 'GET', ['user' => ['first_name' => 'Taylor', 'email' => 'taylor@laravel.com']]);
+        $merge = ['user.last_name' => 'Otwell'];
+        $request->mergeIfMissing($merge);
+        $this->assertSame('Otwell', $request->input('user.last_name'));
+
+        $request = Request::create('/', 'GET', ['user' => ['first_name' => 'Taylor', 'email' => 'taylor@laravel.com']]);
+        $merge = ['user.first_name' => 'John'];
+        $request->mergeIfMissing($merge);
+        $this->assertSame('Taylor', $request->input('user.first_name'));
     }
 
     public function testReplaceMethod()
@@ -1007,10 +1109,16 @@ class HttpRequestTest extends TestCase
         $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'Bearer fooBearerbar']);
         $this->assertSame('fooBearerbar', $request->bearerToken());
 
+        $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'bearer fooBearerbar']);
+        $this->assertSame('fooBearerbar', $request->bearerToken());
+
         $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'Basic foo, Bearer bar']);
         $this->assertSame('bar', $request->bearerToken());
 
         $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'Bearer foo,bar']);
+        $this->assertSame('foo', $request->bearerToken());
+
+        $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'bearer foo,bar']);
         $this->assertSame('foo', $request->bearerToken());
 
         $request = Request::create('/', 'GET', [], [], [], ['HTTP_AUTHORIZATION' => 'foo,bar']);
@@ -1069,9 +1177,7 @@ class HttpRequestTest extends TestCase
         ];
     }
 
-    /**
-     * @dataProvider getPrefersCases
-     */
+    #[DataProvider('getPrefersCases')]
     public function testPrefersMethod($accept, $prefers, $expected)
     {
         $this->assertSame(
@@ -1555,5 +1661,59 @@ class HttpRequestTest extends TestCase
         $request = Request::create('/', 'GET', ['name' => 'Taylor', 'email' => 'foo']);
         $request->setLaravelSession($session);
         $request->flashExcept(['email']);
+    }
+
+    public function testGeneratingJsonRequestFromParentRequestUsesCorrectType()
+    {
+        if (! method_exists(SymfonyRequest::class, 'getPayload')) {
+            return;
+        }
+
+        $base = SymfonyRequest::create('/', 'POST', server: ['CONTENT_TYPE' => 'application/json'], content: '{"hello":"world"}');
+
+        $request = Request::createFromBase($base);
+
+        $this->assertInstanceOf(InputBag::class, $request->getPayload());
+        $this->assertSame('world', $request->getPayload()->get('hello'));
+    }
+
+    public function testJsonRequestsCanMergeDataIntoJsonRequest()
+    {
+        if (! method_exists(SymfonyRequest::class, 'getPayload')) {
+            return;
+        }
+
+        $base = SymfonyRequest::create('/', 'POST', server: ['CONTENT_TYPE' => 'application/json'], content: '{"first":"Taylor","last":"Otwell"}');
+        $request = Request::createFromBase($base);
+
+        $request->merge([
+            'name' => $request->get('first').' '.$request->get('last'),
+        ]);
+
+        $this->assertSame('Taylor Otwell', $request->get('name'));
+    }
+
+    public function testItCanHaveObjectsInJsonPayload()
+    {
+        if (! method_exists(SymfonyRequest::class, 'getPayload')) {
+            return;
+        }
+
+        $base = SymfonyRequest::create('/', 'POST', server: ['CONTENT_TYPE' => 'application/json'], content: '{"framework":{"name":"Laravel"}}');
+        $request = Request::createFromBase($base);
+
+        $value = $request->get('framework');
+
+        $this->assertSame(['name' => 'Laravel'], $request->get('framework'));
+    }
+
+    public function testItDoesNotGenerateJsonErrorsForEmptyContent()
+    {
+        // clear any existing errors
+        json_encode(null);
+
+        Request::create('', 'GET')->json();
+
+        $this->assertTrue(json_last_error() === JSON_ERROR_NONE);
     }
 }

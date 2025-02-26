@@ -4,6 +4,7 @@ namespace Illuminate\Process;
 
 use Closure;
 use Illuminate\Contracts\Process\ProcessResult as ProcessResultContract;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Traits\Macroable;
 use PHPUnit\Framework\Assert as PHPUnit;
 
@@ -85,7 +86,7 @@ class Factory
      * @param  \Closure|array|null  $callback
      * @return $this
      */
-    public function fake(Closure|array $callback = null)
+    public function fake(Closure|array|null $callback = null)
     {
         $this->recording = true;
 
@@ -184,7 +185,7 @@ class Factory
         $callback = is_string($callback) ? fn ($process) => $process->command === $callback : $callback;
 
         PHPUnit::assertTrue(
-            collect($this->recorded)->filter(function ($pair) use ($callback) {
+            (new Collection($this->recorded))->filter(function ($pair) use ($callback) {
                 return $callback($pair[0], $pair[1]);
             })->count() > 0,
             'An expected process was not invoked.'
@@ -204,7 +205,7 @@ class Factory
     {
         $callback = is_string($callback) ? fn ($process) => $process->command === $callback : $callback;
 
-        $count = collect($this->recorded)->filter(function ($pair) use ($callback) {
+        $count = (new Collection($this->recorded))->filter(function ($pair) use ($callback) {
             return $callback($pair[0], $pair[1]);
         })->count();
 
@@ -212,6 +213,8 @@ class Factory
             $times, $count,
             "An expected process ran {$count} times instead of {$times} times."
         );
+
+        return $this;
     }
 
     /**
@@ -225,7 +228,7 @@ class Factory
         $callback = is_string($callback) ? fn ($process) => $process->command === $callback : $callback;
 
         PHPUnit::assertTrue(
-            collect($this->recorded)->filter(function ($pair) use ($callback) {
+            (new Collection($this->recorded))->filter(function ($pair) use ($callback) {
                 return $callback($pair[0], $pair[1]);
             })->count() === 0,
             'An unexpected process was invoked.'
@@ -275,12 +278,12 @@ class Factory
      * Start defining a series of piped processes.
      *
      * @param  callable|array  $callback
-     * @return \Illuminate\Process\Pipe
+     * @return \Illuminate\Contracts\Process\ProcessResult
      */
     public function pipe(callable|array $callback, ?callable $output = null)
     {
         return is_array($callback)
-            ? (new Pipe($this, fn ($pipe) => collect($callback)->each(
+            ? (new Pipe($this, fn ($pipe) => (new Collection($callback))->each(
                 fn ($command) => $pipe->command($command)
             )))->run(output: $output)
             : (new Pipe($this, $callback))->run(output: $output);

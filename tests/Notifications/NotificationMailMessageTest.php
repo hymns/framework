@@ -75,7 +75,7 @@ class NotificationMailMessageTest extends TestCase
 
         $message = new MailMessage;
         $message->cc('test@example.com')
-                ->cc('test@example.com', 'Test');
+            ->cc('test@example.com', 'Test');
 
         $this->assertSame([['test@example.com', null], ['test@example.com', 'Test']], $message->cc);
 
@@ -94,7 +94,7 @@ class NotificationMailMessageTest extends TestCase
 
         $message = new MailMessage;
         $message->bcc('test@example.com')
-                ->bcc('test@example.com', 'Test');
+            ->bcc('test@example.com', 'Test');
 
         $this->assertSame([['test@example.com', null], ['test@example.com', 'Test']], $message->bcc);
 
@@ -113,7 +113,7 @@ class NotificationMailMessageTest extends TestCase
 
         $message = new MailMessage;
         $message->replyTo('test@example.com')
-                ->replyTo('test@example.com', 'Test');
+            ->replyTo('test@example.com', 'Test');
 
         $this->assertSame([['test@example.com', null], ['test@example.com', 'Test']], $message->replyTo);
 
@@ -313,5 +313,50 @@ class NotificationMailMessageTest extends TestCase
                 'mime' => 'image/png',
             ],
         ], $mailMessage->rawAttachments[0]);
+    }
+
+    public function testItAttachesManyFiles()
+    {
+        $mailMessage = new MailMessage();
+        $attachable = new class() implements Attachable
+        {
+            public function toMailAttachment()
+            {
+                return Attachment::fromData(fn () => 'bar', 'foo.jpg')->withMime('image/png');
+            }
+        };
+
+        $mailMessage->attachMany([
+            $attachable,
+            '/path/to/forge.svg',
+            '/path/to/vapor.svg' => [
+                'as' => 'Logo.svg',
+                'mime' => 'image/svg+xml',
+            ],
+        ]);
+
+        $this->assertSame([
+            [
+                'data' => 'bar',
+                'name' => 'foo.jpg',
+                'options' => [
+                    'mime' => 'image/png',
+                ],
+            ],
+        ], $mailMessage->rawAttachments);
+
+        $this->assertSame([
+            [
+                'file' => '/path/to/forge.svg',
+                'options' => [],
+            ],
+            [
+                'file' => '/path/to/vapor.svg',
+                'options' => [
+                    'as' => 'Logo.svg',
+                    'mime' => 'image/svg+xml',
+                ],
+            ],
+        ], $mailMessage->attachments);
     }
 }

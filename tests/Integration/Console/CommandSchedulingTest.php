@@ -6,6 +6,7 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Str;
 use Orchestra\Testbench\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class CommandSchedulingTest extends TestCase
 {
@@ -62,12 +63,11 @@ class CommandSchedulingTest extends TestCase
         parent::tearDown();
     }
 
-    /**
-     * @dataProvider executionProvider
-     */
+    #[DataProvider('executionProvider')]
     public function testExecutionOrder($background, $expected)
     {
-        $event = $this->app->make(Schedule::class)
+        $schedule = $this->app->make(Schedule::class);
+        $event = $schedule
             ->command("test:{$this->id}")
             ->onOneServer()
             ->after(function () {
@@ -82,8 +82,11 @@ class CommandSchedulingTest extends TestCase
         }
 
         // We'll trigger the scheduler three times to simulate multiple servers
+        $this->app->instance(Schedule::class, clone $schedule);
         $this->artisan('schedule:run');
+        $this->app->instance(Schedule::class, clone $schedule);
         $this->artisan('schedule:run');
+        $this->app->instance(Schedule::class, clone $schedule);
         $this->artisan('schedule:run');
 
         if ($background) {

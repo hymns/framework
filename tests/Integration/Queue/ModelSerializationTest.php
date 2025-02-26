@@ -6,13 +6,18 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Queue\Attributes\WithoutRelations;
 use Illuminate\Queue\SerializesModels;
 use LogicException;
+use Orchestra\Testbench\Attributes\WithConfig;
 use Orchestra\Testbench\TestCase;
 use Schema;
 
 class ModelSerializationTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function getEnvironmentSetUp($app)
     {
         $app['config']->set('database.connections.custom', [
@@ -62,6 +67,8 @@ class ModelSerializationTest extends TestCase
 
     public function testItSerializeUserOnDefaultConnection()
     {
+        $defaultConnection = config('database.default');
+
         $user = ModelSerializationTestUser::create([
             'email' => 'mohamed@laravel.com',
         ]);
@@ -74,16 +81,16 @@ class ModelSerializationTest extends TestCase
 
         $unSerialized = unserialize($serialized);
 
-        $this->assertSame('testing', $unSerialized->user->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->user->getConnectionName());
         $this->assertSame('mohamed@laravel.com', $unSerialized->user->email);
 
-        $serialized = serialize(new CollectionSerializationTestClass(ModelSerializationTestUser::on('testing')->get()));
+        $serialized = serialize(new CollectionSerializationTestClass(ModelSerializationTestUser::on($defaultConnection)->get()));
 
         $unSerialized = unserialize($serialized);
 
-        $this->assertSame('testing', $unSerialized->users[0]->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->users[0]->getConnectionName());
         $this->assertSame('mohamed@laravel.com', $unSerialized->users[0]->email);
-        $this->assertSame('testing', $unSerialized->users[1]->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->users[1]->getConnectionName());
         $this->assertSame('taylor@laravel.com', $unSerialized->users[1]->email);
     }
 
@@ -278,6 +285,8 @@ class ModelSerializationTest extends TestCase
     {
         require_once __DIR__.'/typed-properties.php';
 
+        $defaultConnection = config('database.default');
+
         $user = ModelSerializationTestUser::create([
             'email' => 'mohamed@laravel.com',
         ]);
@@ -290,21 +299,22 @@ class ModelSerializationTest extends TestCase
 
         $unSerialized = unserialize($serialized);
 
-        $this->assertSame('testing', $unSerialized->user->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->user->getConnectionName());
         $this->assertSame('mohamed@laravel.com', $unSerialized->user->email);
         $this->assertSame(5, $unSerialized->getId());
         $this->assertSame(['James', 'Taylor', 'Mohamed'], $unSerialized->getNames());
 
-        $serialized = serialize(new TypedPropertyCollectionTestClass(ModelSerializationTestUser::on('testing')->get()));
+        $serialized = serialize(new TypedPropertyCollectionTestClass(ModelSerializationTestUser::on($defaultConnection)->get()));
 
         $unSerialized = unserialize($serialized);
 
-        $this->assertSame('testing', $unSerialized->users[0]->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->users[0]->getConnectionName());
         $this->assertSame('mohamed@laravel.com', $unSerialized->users[0]->email);
-        $this->assertSame('testing', $unSerialized->users[1]->getConnectionName());
+        $this->assertSame($defaultConnection, $unSerialized->users[1]->getConnectionName());
         $this->assertSame('taylor@laravel.com', $unSerialized->users[1]->email);
     }
 
+    #[WithConfig('database.default', 'testing')]
     public function test_model_serialization_structure()
     {
         $user = ModelSerializationTestUser::create([
@@ -316,6 +326,41 @@ class ModelSerializationTest extends TestCase
         $this->assertSame(
             'O:78:"Illuminate\\Tests\\Integration\\Queue\\ModelSerializationParentAccessibleTestClass":2:{s:4:"user";O:45:"Illuminate\\Contracts\\Database\\ModelIdentifier":5:{s:5:"class";s:61:"Illuminate\\Tests\\Integration\\Queue\\ModelSerializationTestUser";s:2:"id";i:1;s:9:"relations";a:0:{}s:10:"connection";s:7:"testing";s:15:"collectionClass";N;}s:8:"'."\0".'*'."\0".'user2";O:45:"Illuminate\\Contracts\\Database\\ModelIdentifier":5:{s:5:"class";s:61:"Illuminate\\Tests\\Integration\\Queue\\ModelSerializationTestUser";s:2:"id";i:1;s:9:"relations";a:0:{}s:10:"connection";s:7:"testing";s:15:"collectionClass";N;}}', $serialized
         );
+    }
+
+    #[WithConfig('database.default', 'testing')]
+    public function test_it_respects_without_relations_attribute()
+    {
+        $user = User::create([
+            'email' => 'taylor@laravel.com',
+        ])->load(['roles']);
+
+        $serialized = serialize(new ModelSerializationWithoutRelations($user));
+
+        $this->assertSame(
+            'O:69:"Illuminate\Tests\Integration\Queue\ModelSerializationWithoutRelations":1:{s:4:"user";O:45:"Illuminate\Contracts\Database\ModelIdentifier":5:{s:5:"class";s:39:"Illuminate\Tests\Integration\Queue\User";s:2:"id";i:1;s:9:"relations";a:0:{}s:10:"connection";s:7:"testing";s:15:"collectionClass";N;}}', $serialized
+        );
+    }
+
+    #[WithConfig('database.default', 'testing')]
+    public function test_it_respects_without_relations_attribute_applied_to_class()
+    {
+        $user = User::create([
+            'email' => 'taylor@laravel.com',
+        ])->load(['roles']);
+
+        $serialized = serialize(new ModelSerializationAttributeTargetsClassTestClass($user, new DataValueObject('hello')));
+
+        $this->assertSame(
+            'O:83:"Illuminate\Tests\Integration\Queue\ModelSerializationAttributeTargetsClassTestClass":2:{s:4:"user";O:45:"Illuminate\Contracts\Database\ModelIdentifier":5:{s:5:"class";s:39:"Illuminate\Tests\Integration\Queue\User";s:2:"id";i:1;s:9:"relations";a:0:{}s:10:"connection";s:7:"testing";s:15:"collectionClass";N;}s:5:"value";O:50:"Illuminate\Tests\Integration\Queue\DataValueObject":1:{s:5:"value";s:5:"hello";}}',
+            $serialized
+        );
+
+        /** @var ModelSerializationAttributeTargetsClassTestClass $unserialized */
+        $unserialized = unserialize($serialized);
+
+        $this->assertFalse($unserialized->user->relationLoaded('roles'));
+        $this->assertEquals('hello', $unserialized->value->value);
     }
 
     public function test_serialization_types_empty_custom_eloquent_collection()
@@ -499,6 +544,29 @@ class ModelSerializationParentAccessibleTestClass extends ModelSerializationAcce
     //
 }
 
+class ModelSerializationWithoutRelations
+{
+    use SerializesModels;
+
+    #[WithoutRelations]
+    public User $user;
+
+    public function __construct(User $user)
+    {
+        $this->user = $user;
+    }
+}
+
+#[WithoutRelations]
+class ModelSerializationAttributeTargetsClassTestClass
+{
+    use SerializesModels;
+
+    public function __construct(public User $user, public DataValueObject $value)
+    {
+    }
+}
+
 class ModelRelationSerializationTestClass
 {
     use SerializesModels;
@@ -520,5 +588,12 @@ class CollectionSerializationTestClass
     public function __construct($users)
     {
         $this->users = $users;
+    }
+}
+
+class DataValueObject
+{
+    public function __construct(public $value = 1)
+    {
     }
 }

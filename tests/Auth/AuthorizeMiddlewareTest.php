@@ -19,6 +19,8 @@ use Mockery as m;
 use PHPUnit\Framework\TestCase;
 use stdClass;
 
+include_once 'Enums.php';
+
 class AuthorizeMiddlewareTest extends TestCase
 {
     protected $container;
@@ -43,9 +45,7 @@ class AuthorizeMiddlewareTest extends TestCase
 
         $this->container->bind(CallableDispatcherContract::class, fn ($app) => new CallableDispatcher($app));
 
-        $this->container->singleton(Registrar::class, function () {
-            return $this->router;
-        });
+        $this->container->instance(Registrar::class, $this->router);
     }
 
     protected function tearDown(): void
@@ -53,6 +53,18 @@ class AuthorizeMiddlewareTest extends TestCase
         m::close();
 
         Container::setInstance(null);
+    }
+
+    public function testItCanGenerateDefinitionViaStaticMethod()
+    {
+        $signature = (string) Authorize::using('ability');
+        $this->assertSame('Illuminate\Auth\Middleware\Authorize:ability', $signature);
+
+        $signature = (string) Authorize::using('ability', 'model');
+        $this->assertSame('Illuminate\Auth\Middleware\Authorize:ability,model', $signature);
+
+        $signature = (string) Authorize::using('ability', 'model', \App\Models\Comment::class);
+        $this->assertSame('Illuminate\Auth\Middleware\Authorize:ability,model,App\Models\Comment', $signature);
     }
 
     public function testSimpleAbilityUnauthorized()
@@ -102,6 +114,23 @@ class AuthorizeMiddlewareTest extends TestCase
 
         $this->router->get('dashboard', [
             'middleware' => Authorize::class.':view-dashboard,"some string"',
+            'uses' => function () {
+                return 'success';
+            },
+        ]);
+
+        $response = $this->router->dispatch(Request::create('dashboard', 'GET'));
+
+        $this->assertSame('success', $response->content());
+    }
+
+    public function testSimpleAbilityWithBackedEnumParameter()
+    {
+        $this->gate()->define('view-dashboard', function ($user) {
+            return true;
+        });
+
+        $this->router->middleware(Authorize::using(AbilitiesEnum::VIEW_DASHBOARD))->get('dashboard', [
             'uses' => function () {
                 return 'success';
             },
@@ -306,10 +335,8 @@ class AuthorizeMiddlewareTest extends TestCase
 
         $request = m::mock(Request::class);
 
-        $nextParam = null;
-
-        $next = function ($param) use (&$nextParam) {
-            $nextParam = $param;
+        $next = function () {
+            //
         };
 
         (new Authorize($this->gate()))
